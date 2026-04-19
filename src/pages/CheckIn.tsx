@@ -1,26 +1,30 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { usePlayer } from '../hooks/usePlayer'
 
 export default function CheckIn() {
-  const { player, setPlayer } = usePlayer()
-
   const [nameInput, setNameInput] = useState('')
   const [isMember, setIsMember] = useState(false)
   const [isInsured, setIsInsured] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const [checkedInName, setCheckedInName] = useState('')
+  const [error, setError] = useState<string | null>(null)
 
-  if (player || done) {
+  if (done) {
     return (
       <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
         <div className="w-full max-w-sm text-center">
           <div className="text-5xl mb-4">✅</div>
           <h2 className="text-2xl font-bold mb-2">You're in the queue!</h2>
-          <p className="text-gray-400 text-sm">
-            {checkedInName || player?.playerName || 'Welcome'} — you've been added to the queue. Check the main screen for your position.
+          <p className="text-gray-400 text-sm mb-6">
+            {checkedInName} — you've been added. Check the main screen for your position.
           </p>
+          <button
+            onClick={() => { setDone(false); setNameInput(''); setIsMember(false); setIsInsured(false) }}
+            className="px-6 py-2.5 rounded-xl bg-gray-700 hover:bg-gray-600 text-sm font-semibold transition-colors"
+          >
+            Check in another player
+          </button>
         </div>
       </div>
     )
@@ -31,24 +35,46 @@ export default function CheckIn() {
     const trimmed = nameInput.trim()
     if (!trimmed) return
     setSubmitting(true)
+    setError(null)
 
-    const newPlayer = await setPlayer(trimmed, isMember, isInsured)
-    if (!newPlayer) { setSubmitting(false); return }
+    try {
+      // Look up existing player or create new one
+      const { data: existing } = await supabase
+        .from('players').select('id').ilike('name', trimmed).maybeSingle()
 
-    // Add to queue
-    const { data: currentQueue } = await supabase
-      .from('queue').select('id, position').order('position', { ascending: true })
-    const maxPos = currentQueue && currentQueue.length > 0
-      ? currentQueue[currentQueue.length - 1].position : 0
-    await supabase.from('queue').insert({
-      player_id: newPlayer.playerId,
-      position: maxPos + 1,
-      is_new: true,
-    })
+      let playerId: string
+      if (existing) {
+        playerId = existing.id
+        await supabase.from('players').update({ member: isMember, insured: isInsured }).eq('id', playerId)
+      } else {
+        const { data: created, error: createErr } = await supabase
+          .from('players')
+          .insert({ name: trimmed, member: isMember, insured: isInsured, has_played: false })
+          .select('id').single()
+        if (createErr || !created) { setError('Could not sign in. Try again.'); return }
+        playerId = created.id
+      }
 
-    setCheckedInName(trimmed)
-    setSubmitting(false)
-    setDone(true)
+      // Check if already in queue
+      const { data: inQueue } = await supabase
+        .from('queue').select('id').eq('player_id', playerId).maybeSingle()
+      if (inQueue) {
+        setCheckedInName(trimmed)
+        setDone(true)
+        return
+      }
+
+      // Add to end of queue
+      const { data: currentQueue } = await supabase
+        .from('queue').select('position').order('position', { ascending: false }).limit(1).maybeSingle()
+      const maxPos = currentQueue?.position ?? 0
+      await supabase.from('queue').insert({ player_id: playerId, position: maxPos + 1, is_new: true })
+
+      setCheckedInName(trimmed)
+      setDone(true)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -100,6 +126,7 @@ export default function CheckIn() {
             </label>
           </div>
 
+          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
           <button
             type="submit"
             disabled={!nameInput.trim() || submitting}
