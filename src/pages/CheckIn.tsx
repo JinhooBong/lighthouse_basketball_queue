@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { supabase } from '../lib/supabase'
 import { usePlayer } from '../hooks/usePlayer'
 
 export default function CheckIn() {
@@ -9,16 +10,16 @@ export default function CheckIn() {
   const [isInsured, setIsInsured] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
+  const [checkedInName, setCheckedInName] = useState('')
 
   if (player || done) {
     return (
       <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
         <div className="w-full max-w-sm text-center">
           <div className="text-5xl mb-4">✅</div>
-          <h2 className="text-2xl font-bold mb-2">You're checked in!</h2>
+          <h2 className="text-2xl font-bold mb-2">You're in the queue!</h2>
           <p className="text-gray-400 text-sm">
-            {player?.playerName ?? 'Welcome'}! Ask someone to add you to the queue on the main
-            screen.
+            {checkedInName || player?.playerName || 'Welcome'} — you've been added to the queue. Check the main screen for your position.
           </p>
         </div>
       </div>
@@ -30,7 +31,22 @@ export default function CheckIn() {
     const trimmed = nameInput.trim()
     if (!trimmed) return
     setSubmitting(true)
-    await setPlayer(trimmed, isMember, isInsured)
+
+    const newPlayer = await setPlayer(trimmed, isMember, isInsured)
+    if (!newPlayer) { setSubmitting(false); return }
+
+    // Add to queue
+    const { data: currentQueue } = await supabase
+      .from('queue').select('id, position').order('position', { ascending: true })
+    const maxPos = currentQueue && currentQueue.length > 0
+      ? currentQueue[currentQueue.length - 1].position : 0
+    await supabase.from('queue').insert({
+      player_id: newPlayer.playerId,
+      position: maxPos + 1,
+      is_new: true,
+    })
+
+    setCheckedInName(trimmed)
     setSubmitting(false)
     setDone(true)
   }

@@ -19,7 +19,27 @@ export function useQueue() {
   }, [])
 
   useEffect(() => {
-    fetchQueue()
+    const initQueue = async () => {
+      // Reset queue if oldest entry is from a previous calendar day
+      const { data: oldest } = await supabase
+        .from('queue').select('created_at').order('created_at', { ascending: true }).limit(1).maybeSingle()
+      if (oldest) {
+        const entryDate = new Date(oldest.created_at).toLocaleDateString()
+        const today = new Date().toLocaleDateString()
+        if (entryDate !== today) {
+          await supabase.from('queue').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+          await supabase.from('court').update({
+            team_a: [], team_b: [],
+            team_a_score: 0, team_b_score: 0,
+            team_a_games: 0, team_b_games: 0,
+            game_active: false,
+          }).eq('id', 1)
+        }
+      }
+      fetchQueue()
+    }
+
+    initQueue()
 
     const channel = supabase
       .channel('queue-changes')
